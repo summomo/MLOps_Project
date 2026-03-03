@@ -76,3 +76,5 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/translate" -ContentTy
 ⚠️ 当前 stub 主要用于验证 **MLOps 流程（打包、注册、按 stage 加载、在线服务）**，不代表真实翻译质量。
 
 后续请将真实 greedy/beam decode 逻辑替换到 `TranslatorPyfunc._translate_with_model`（文件：`ml/src/seq2seq_mlflow_model.py`）。
+
+CI check registration
