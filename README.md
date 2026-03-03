@@ -78,3 +78,61 @@ No reusable seq2seq beam-search inference entrypoint was found in the current re
 Later, replace `TranslatorPyfunc._translate_with_model` with the real greedy/beam decode logic (file: `ml/src/seq2seq_mlflow_model.py`).
 
 CI check registration
+
+## 7) Render deployment and promotion gates
+
+### Render services (Blueprint)
+
+This repository includes `render.yaml` to create two web services from the same codebase:
+
+- `mlops-api-staging` tracking branch `staging`
+- `mlops-api-prod` tracking branch `main`
+
+Both services start with:
+
+`uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT`
+
+Health check path is:
+
+`/health`
+
+### Required Render environment variables
+
+For both services:
+
+- `MODEL_NAME=fr2en-translator`
+- `MLFLOW_TRACKING_URI` (set in Render dashboard)
+- Optional auth vars if needed by your tracking backend:
+  - `MLFLOW_TRACKING_USERNAME`
+  - `MLFLOW_TRACKING_PASSWORD`
+
+Stage-specific values:
+
+- Staging service: `MODEL_STAGE=Staging`
+- Production service: `MODEL_STAGE=Production`
+
+`MODEL_STAGE` is case-sensitive and must match MLflow stage enums exactly.
+
+### Gates for staging to main promotion
+
+`ml/src/gates.py` runs smoke and latency gates against `STAGING_URL`:
+
+- Sends 3 requests to `POST {STAGING_URL}/translate`
+- Smoke gate: each response must be HTTP 200 with a non-empty `translation`
+- Latency gate: p95 latency must be within threshold (default `1.0s`)
+
+When successful, it prints `GATES PASSED` and exits with code `0`; otherwise exits with code `1`.
+
+### GitHub Actions gate on main PRs
+
+`/.github/workflows/gates-on-main.yml` runs on pull requests targeting `main` and executes:
+
+`python ml/src/gates.py`
+
+Create this GitHub secret before using the workflow:
+
+- Repository -> Settings -> Secrets and variables -> Actions -> New repository secret
+- Name: `STAGING_URL`
+- Value: your staging service base URL, for example `https://mlops-api-staging.onrender.com`
+
+Use the resulting `gates` workflow status check in branch rulesets so that merges to `main` require successful gates.
