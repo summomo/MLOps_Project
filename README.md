@@ -1,16 +1,16 @@
 # MLOps Final Project
 
-## Registry-first (方案 A) 使用说明
+## Registry-first (Plan A) Usage Guide
 
-### 1) 安装依赖
+### 1) Install dependencies
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-### 2) 设置环境变量（Windows PowerShell）
+### 2) Set environment variables (Windows PowerShell)
 
-> 注意：不要把外部 project 的模型文件复制到本仓库；通过绝对路径注入。
+> Important: do not copy model files from the external project into this repository; provide absolute paths via environment variables.
 
 ```powershell
 $env:MODEL_CKPT_PATH="C:\absolute\path\to\best.pt"
@@ -20,43 +20,43 @@ $env:MODEL_STAGE="Staging"
 $env:MLFLOW_TRACKING_URI="http://127.0.0.1:5000"
 ```
 
-`MODEL_STAGE` 必须使用 MLflow 固定枚举且大小写严格一致：`Staging`、`Production`、`Archived`、`None`。
-生产环境请严格设置为：`MODEL_STAGE="Production"`（避免误加载非生产 stage）。
+`MODEL_STAGE` must use MLflow fixed enum values with exact case: `Staging`, `Production`, `Archived`, `None`.
+For production environments, strictly use: `MODEL_STAGE="Production"` (to avoid loading a non-production stage by mistake).
 
-如需认证，请额外设置你 MLflow Server 所需的环境变量（例如用户名、密码或 token）。
+If authentication is required, set the additional environment variables expected by your MLflow server (for example username/password or token).
 
-### 3) 打包并注册到 MLflow Registry
+### 3) Package and register to MLflow Registry
 
 ```powershell
 python ml/src/export_mlflow_model.py
 ```
 
-脚本会：
-- 读取 `MODEL_CKPT_PATH` 和 `TOKENIZER_PATH`
-- 将 checkpoint + tokenizer 作为 artifacts 一起打包到 `mlflow.pyfunc`
-- 记录参数：`git_commit`、`dvc_data_rev`、`ckpt_source_path`、`tokenizer_source_path`
-- 注册到 `MODEL_NAME`（默认 `fr2en-translator`）
-- 尝试自动切换到 `Staging`，如果权限不足会打印手动命令
+The script will:
+- Read `MODEL_CKPT_PATH` and `TOKENIZER_PATH`
+- Package checkpoint + tokenizer together as `mlflow.pyfunc` artifacts
+- Log params: `git_commit`, `dvc_data_rev`, `ckpt_source_path`, `tokenizer_source_path`
+- Register under `MODEL_NAME` (default: `fr2en-translator`)
+- Try to transition automatically to `Staging`; if permissions are insufficient, it prints manual commands
 
-### 4) 启动 API（仅从 Registry Stage 加载）
+### 4) Start the API (loads only from Registry stage)
 
 ```powershell
 uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-服务启动时会执行：
+At startup, the service executes:
 
 `mlflow.pyfunc.load_model("models:/{MODEL_NAME}/{MODEL_STAGE}")`
 
-不使用本地 `torch.load(best.pt)` 路径加载。
+No local `torch.load(best.pt)` path-based loading is used.
 
-### 5) 调用接口
+### 5) Call the endpoint
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/translate" -ContentType "application/json" -Body '{"text":"bonjour le monde"}'
 ```
 
-返回示例：
+Example response:
 
 ```json
 {
@@ -67,12 +67,72 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/translate" -ContentTy
 }
 ```
 
-### 6) 推理逻辑说明
+### 6) Inference logic notes
 
-当前仓库未发现可复用的现成 seq2seq beam-search 推理入口，因此 `ml/src/seq2seq_mlflow_model.py` 中实现了最小可运行推理：
-- 优先尝试调用 checkpoint 内可用的 `translate` / `predict` / `forward`
-- 若无法匹配真实模型结构，则回退到 tokenizer 编码后解码的最小 stub，保证服务可运行
+No reusable seq2seq beam-search inference entrypoint was found in the current repository, so `ml/src/seq2seq_mlflow_model.py` implements a minimal runnable inference path:
+- First it tries available checkpoint methods such as `translate` / `predict` / `forward`
+- If the real model structure cannot be matched, it falls back to a minimal tokenizer encode/decode stub to keep the service runnable
 
-⚠️ 当前 stub 主要用于验证 **MLOps 流程（打包、注册、按 stage 加载、在线服务）**，不代表真实翻译质量。
+⚠️ The current stub is mainly for validating the **MLOps workflow (packaging, registration, stage-based loading, and online serving)**, and does not represent real translation quality.
 
-后续请将真实 greedy/beam decode 逻辑替换到 `TranslatorPyfunc._translate_with_model`（文件：`ml/src/seq2seq_mlflow_model.py`）。
+Later, replace `TranslatorPyfunc._translate_with_model` with the real greedy/beam decode logic (file: `ml/src/seq2seq_mlflow_model.py`).
+
+CI check registration
+
+## 7) Render deployment and promotion gates
+
+### Render services (Blueprint)
+
+This repository includes `render.yaml` to create two web services from the same codebase:
+
+- `mlops-api-staging` tracking branch `staging`
+- `mlops-api-prod` tracking branch `main`
+
+Both services start with:
+
+`uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT`
+
+Health check path is:
+
+`/health`
+
+### Required Render environment variables
+
+For both services:
+
+- `MODEL_NAME=fr2en-translator`
+- `MLFLOW_TRACKING_URI` (set in Render dashboard)
+- Optional auth vars if needed by your tracking backend:
+  - `MLFLOW_TRACKING_USERNAME`
+  - `MLFLOW_TRACKING_PASSWORD`
+
+Stage-specific values:
+
+- Staging service: `MODEL_STAGE=Staging`
+- Production service: `MODEL_STAGE=Production`
+
+`MODEL_STAGE` is case-sensitive and must match MLflow stage enums exactly.
+
+### Gates for staging to main promotion
+
+`ml/src/gates.py` runs smoke and latency gates against `STAGING_URL`:
+
+- Sends 3 requests to `POST {STAGING_URL}/translate`
+- Smoke gate: each response must be HTTP 200 with a non-empty `translation`
+- Latency gate: p95 latency must be within threshold (default `1.0s`)
+
+When successful, it prints `GATES PASSED` and exits with code `0`; otherwise exits with code `1`.
+
+### GitHub Actions gate on main PRs
+
+`/.github/workflows/gates-on-main.yml` runs on pull requests targeting `main` and executes:
+
+`python ml/src/gates.py`
+
+Create this GitHub secret before using the workflow:
+
+- Repository -> Settings -> Secrets and variables -> Actions -> New repository secret
+- Name: `STAGING_URL`
+- Value: your staging service base URL, for example `https://mlops-api-staging.onrender.com`
+
+Use the resulting `gates` workflow status check in branch rulesets so that merges to `main` require successful gates.
