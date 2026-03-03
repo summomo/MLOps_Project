@@ -9,6 +9,8 @@ services:
     startCommand: uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
       - key: MODEL_NAME
         value: fr2en-translator
       - key: MODEL_STAGE
@@ -30,6 +32,8 @@ services:
     startCommand: uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
       - key: MODEL_NAME
         value: fr2en-translator
       - key: MODEL_STAGE

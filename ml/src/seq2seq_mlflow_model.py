@@ -15,9 +15,33 @@ class TranslatorPyfunc(mlflow.pyfunc.PythonModel):
         self.tokenizer: spm.SentencePieceProcessor | None = None
         self.device = torch.device("cpu")
 
+    def _resolve_artifact_path(self, raw_path: str) -> Path:
+        direct_path = Path(raw_path)
+        if direct_path.exists():
+            return direct_path
+
+        normalized_path = Path(raw_path.replace("\\", "/"))
+        if normalized_path.exists():
+            return normalized_path
+
+        filename = Path(raw_path.replace("\\", "/")).name
+        search_roots = [normalized_path.parent, direct_path.parent]
+
+        for root in search_roots:
+            if not root:
+                continue
+            candidate = root / filename
+            if candidate.exists():
+                return candidate
+            artifacts_candidate = root / "artifacts" / filename
+            if artifacts_candidate.exists():
+                return artifacts_candidate
+
+        raise FileNotFoundError(f"Artifact not found: {raw_path}")
+
     def load_context(self, context: mlflow.pyfunc.PythonModelContext) -> None:
-        ckpt_path = Path(context.artifacts["checkpoint"])
-        tokenizer_path = Path(context.artifacts["tokenizer"])
+        ckpt_path = self._resolve_artifact_path(context.artifacts["checkpoint"])
+        tokenizer_path = self._resolve_artifact_path(context.artifacts["tokenizer"])
 
         self.tokenizer = spm.SentencePieceProcessor()
         self.tokenizer.load(str(tokenizer_path))
