@@ -1,0 +1,17 @@
+__pycache__/
+.venv/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.env
+*.model
+*.pt
+best.pt
+spm*.model
+.mlflow/
+mlruns/
+mlflow.db
+outputs/
+models/seq2seq/seq2seq_checkpoint.pt
+models/seq2seq/seq2seq_spm.model

@@ -1,0 +1,8 @@
+mlflow
+torch
+sentencepiece
+pandas
+fastapi
+uvicorn
+pytest
+httpx
