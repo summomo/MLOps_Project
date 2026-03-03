@@ -75,6 +75,10 @@ def create_app(load_model_func: Callable[[str, str | None], Any] = _default_load
 
     app = FastAPI(title="Registry-first Translation API", lifespan=lifespan)
 
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
     @app.post("/translate", response_model=TranslateResponse)
     def translate(payload: TranslateRequest) -> TranslateResponse:
         if not payload.text or not payload.text.strip():
