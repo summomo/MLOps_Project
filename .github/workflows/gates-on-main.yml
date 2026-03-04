@@ -22,14 +22,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Wait for staging readiness
+        env:
+          STAGING_URL: ${{ secrets.STAGING_URL != '' && secrets.STAGING_URL || vars.STAGING_URL != '' && vars.STAGING_URL || 'https://mlops-api-staging.onrender.com' }}
+        run: |
+          echo "Using STAGING_URL=${STAGING_URL}"
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "${STAGING_URL}/ready" || true)
+            if [ "$code" = "200" ]; then
+              echo "Staging is ready"
+              exit 0
+            fi
+            echo "Waiting for staging readiness (${i}/30), status=${code}"
+            sleep 20
+          done
+          echo "Staging /ready did not become 200 within 10 minutes"
+          exit 1
+
       - name: Run staging gates
         env:
           STAGING_URL: ${{ secrets.STAGING_URL != '' && secrets.STAGING_URL || vars.STAGING_URL != '' && vars.STAGING_URL || 'https://mlops-api-staging.onrender.com' }}
-          GATE_READY_TIMEOUT_SECONDS: "420"
-          GATE_READY_POLL_SECONDS: "10"
-          GATE_WARMUP_TIMEOUT_SECONDS: "120"
-          GATE_REQUEST_TIMEOUT_SECONDS: "45"
-          GATE_REQUEST_RETRIES: "4"
-          GATE_REQUEST_BACKOFF_SECONDS: "2"
         run: |
           python ml/src/gates.py
