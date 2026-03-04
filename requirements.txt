@@ -2,6 +2,7 @@
 mlflow
 torch==2.5.1+cpu
 sentencepiece
+transformers
 pandas
 fastapi
 uvicorn

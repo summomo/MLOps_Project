@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
 import mlflow
 from mlflow.tracking import MlflowClient
 
+from ml.src.hf_marian_mlflow_model import HFMarianTranslatorPyfunc
 from ml.src.seq2seq_mlflow_model import TranslatorPyfunc
 
 
@@ -75,8 +77,7 @@ def _normalize_stage(stage: str) -> str:
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[2]
 
-    checkpoint_path = _get_required_path("MODEL_CKPT_PATH")
-    tokenizer_path = _get_required_path("TOKENIZER_PATH")
+    hf_model_id = os.getenv("HF_MODEL_ID", "").strip()
     model_name = os.getenv("MODEL_NAME", "fr2en-translator")
 
     tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
@@ -89,18 +90,43 @@ def main() -> None:
     with mlflow.start_run() as run:
         mlflow.log_param("git_commit", git_commit)
         mlflow.log_param("dvc_data_rev", dvc_data_rev)
-        mlflow.log_param("ckpt_source_path", str(checkpoint_path))
-        mlflow.log_param("tokenizer_source_path", str(tokenizer_path))
 
-        model_info = mlflow.pyfunc.log_model(
-            artifact_path="seq2seq_translator",
-            python_model=TranslatorPyfunc(),
-            artifacts={
-                "checkpoint": checkpoint_path.as_posix(),
-                "tokenizer": tokenizer_path.as_posix(),
-            },
-            registered_model_name=model_name,
-        )
+        if hf_model_id:
+            mlflow.log_param("hf_model_id", hf_model_id)
+
+            from transformers import MarianMTModel, MarianTokenizer
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                local_model_dir = Path(tmp_dir) / "hf_model"
+                local_model_dir.mkdir(parents=True, exist_ok=True)
+
+                tokenizer = MarianTokenizer.from_pretrained(hf_model_id)
+                model = MarianMTModel.from_pretrained(hf_model_id)
+                tokenizer.save_pretrained(local_model_dir)
+                model.save_pretrained(local_model_dir)
+
+                model_info = mlflow.pyfunc.log_model(
+                    artifact_path="seq2seq_translator",
+                    python_model=HFMarianTranslatorPyfunc(),
+                    artifacts={"hf_model_dir": local_model_dir.as_posix()},
+                    registered_model_name=model_name,
+                )
+        else:
+            checkpoint_path = _get_required_path("MODEL_CKPT_PATH")
+            tokenizer_path = _get_required_path("TOKENIZER_PATH")
+
+            mlflow.log_param("ckpt_source_path", str(checkpoint_path))
+            mlflow.log_param("tokenizer_source_path", str(tokenizer_path))
+
+            model_info = mlflow.pyfunc.log_model(
+                artifact_path="seq2seq_translator",
+                python_model=TranslatorPyfunc(),
+                artifacts={
+                    "checkpoint": checkpoint_path.as_posix(),
+                    "tokenizer": tokenizer_path.as_posix(),
+                },
+                registered_model_name=model_name,
+            )
 
         print(f"Logged model artifact URI: {model_info.model_uri}")
 
