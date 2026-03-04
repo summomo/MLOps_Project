@@ -164,3 +164,26 @@ python ml/src/export_mlflow_model.py
 
 - `GET /health` returns `200`
 - `POST /translate` with `{"text":"bonjour"}` returns non-empty English output
+
+## 9) Troubleshooting (Render + HF model)
+
+If staging keeps returning `502` on `/translate` while `/health` is still `200`, check Render logs first.
+
+### Common symptoms observed in this project
+
+- `Downloading artifacts ... 100%` appears after first `/translate`
+- Process restarts and Render logs show: `Out of memory (used over 512Mi)`
+- `/ready` stays `503` and `/translate` eventually times out or returns `502`
+
+This indicates the model loading phase exceeds the free Render instance memory.
+
+### Recommended fixes
+
+1. Upgrade Render instance memory (most reliable fix).
+2. Re-export the model from an environment close to production dependencies (to reduce mismatch risks).
+3. If you must stay on low memory, switch to a smaller FR->EN model.
+
+### Notes
+
+- A dependency mismatch warning like `torch (current: 2.5.1+cpu, required: torch==2.10.0)` is a warning, but OOM is the primary blocker.
+- Keep `MODEL_NAME` and `MODEL_STAGE` aligned between Registry and Render environment variables.
