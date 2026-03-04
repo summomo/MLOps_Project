@@ -96,8 +96,8 @@ def main() -> None:
             artifact_path="seq2seq_translator",
             python_model=TranslatorPyfunc(),
             artifacts={
-                "checkpoint": str(checkpoint_path),
-                "tokenizer": str(tokenizer_path),
+                "checkpoint": checkpoint_path.as_posix(),
+                "tokenizer": tokenizer_path.as_posix(),
             },
             registered_model_name=model_name,
         )
