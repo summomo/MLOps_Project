@@ -1,6 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 mlflow
-torch
+torch==2.5.1+cpu
 sentencepiece
+transformers
 pandas
 fastapi
 uvicorn
