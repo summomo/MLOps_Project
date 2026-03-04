@@ -19,6 +19,14 @@ class TranslatorPyfunc(mlflow.pyfunc.PythonModel):
         value = os.getenv(name, "").strip().lower()
         return value in {"1", "true", "yes", "on"}
 
+    def _translate_mode(self) -> str:
+        mode = os.getenv("TRANSLATE_MODE", "full").strip().lower()
+        if self._is_truthy_env("TOKENIZER_ONLY_MODE"):
+            return "stub"
+        if mode not in {"full", "stub"}:
+            return "full"
+        return mode
+
     def _resolve_artifact_path(self, raw_path: str) -> Path:
         normalized_path = Path(raw_path.replace("\\", "/"))
         if normalized_path.exists():
@@ -59,8 +67,7 @@ class TranslatorPyfunc(mlflow.pyfunc.PythonModel):
         self.tokenizer = spm.SentencePieceProcessor()
         self.tokenizer.load(tokenizer_path.as_posix())
 
-        tokenizer_only = self._is_truthy_env("TOKENIZER_ONLY_MODE") or self._is_truthy_env("RENDER")
-        if tokenizer_only:
+        if self._translate_mode() == "stub":
             self.model = None
             return
 

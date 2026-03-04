@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import threading
+import time
+import traceback
 from contextlib import asynccontextmanager
 from typing import Any, Callable
 
@@ -94,24 +96,35 @@ def create_app(load_model_func: Callable[[str, str | None], Any] = _default_load
 
     @app.post("/translate", response_model=TranslateResponse)
     def translate(payload: TranslateRequest) -> TranslateResponse:
-        if not payload.text or not payload.text.strip():
-            raise HTTPException(status_code=400, detail="text must not be empty")
+        started_at = time.perf_counter()
+        print("received request", flush=True)
 
         try:
+            if not payload.text or not payload.text.strip():
+                raise HTTPException(status_code=400, detail="text must not be empty")
+
             model = _ensure_model_loaded()
+            model_input = pd.DataFrame({"text": [payload.text]})
+
+            print("before model.predict", flush=True)
+            prediction = model.predict(model_input)
+            print("after model.predict", flush=True)
+            translation = _extract_translation(prediction)
+
+            elapsed = time.perf_counter() - started_at
+            print(f"elapsed = {elapsed:.3f}s", flush=True)
+
+            return TranslateResponse(
+                translation=translation,
+                model_name=app.state.model_name,
+                model_stage=app.state.model_stage,
+                model_uri=app.state.model_uri,
+            )
+        except HTTPException:
+            raise
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"model load failed: {exc}") from exc
-
-        model_input = pd.DataFrame({"text": [payload.text]})
-        prediction = model.predict(model_input)
-        translation = _extract_translation(prediction)
-
-        return TranslateResponse(
-            translation=translation,
-            model_name=app.state.model_name,
-            model_stage=app.state.model_stage,
-            model_uri=app.state.model_uri,
-        )
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return app
 
