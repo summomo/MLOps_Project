@@ -24,6 +24,6 @@ jobs:
 
       - name: Run staging gates
         env:
-          STAGING_URL: ${{ secrets.STAGING_URL }}
+          STAGING_URL: ${{ secrets.STAGING_URL != '' && secrets.STAGING_URL || vars.STAGING_URL != '' && vars.STAGING_URL || 'https://mlops-api-staging.onrender.com' }}
         run: |
           python ml/src/gates.py
