@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import threading
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -65,81 +64,21 @@ def _extract_translation(prediction: Any) -> str:
 
 
 def create_app(load_model_func: Callable[[str, str | None], Any] = _default_loader) -> FastAPI:
-    model_load_lock = threading.Lock()
-
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
         app.state.model_name = os.getenv("MODEL_NAME", "fr2en-translator")
         app.state.model_stage = _get_stage_from_env()
         app.state.model_uri = f"models:/{app.state.model_name}/{app.state.model_stage}"
-        app.state.model = None
-        app.state.model_loaded = False
-        app.state.model_loading = False
-        app.state.model_load_error = None
-
-        def preload_in_background() -> None:
-            try:
-                _ensure_model_loaded()
-            except Exception:
-                traceback.print_exc()
-
-        threading.Thread(target=preload_in_background, daemon=True).start()
+        app.state.model = load_model_func(app.state.model_uri, app.state.tracking_uri)
 
         yield
 
     app = FastAPI(title="Registry-first Translation API", lifespan=lifespan)
 
     @app.get("/health")
-    def health() -> dict[str, str | bool | None]:
-        return {
-            "status": "ok",
-            "model_loaded": app.state.model_loaded,
-            "model_loading": app.state.model_loading,
-            "ready": app.state.model_loaded,
-            "model_load_error": app.state.model_load_error,
-        }
-
-    @app.get("/ready")
-    def ready() -> dict[str, str | bool | None]:
-        if app.state.model_loaded:
-            return {
-                "status": "ok",
-                "ready": True,
-                "model_loaded": True,
-            }
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "status": "loading",
-                "ready": False,
-                "model_loaded": app.state.model_loaded,
-                "model_loading": app.state.model_loading,
-                "model_load_error": app.state.model_load_error,
-            },
-        )
-
-    def _ensure_model_loaded() -> Any:
-        if app.state.model is not None:
-            return app.state.model
-
-        with model_load_lock:
-            if app.state.model is not None:
-                return app.state.model
-            app.state.model_loading = True
-            app.state.model_load_error = None
-            try:
-                app.state.model = load_model_func(app.state.model_uri, app.state.tracking_uri)
-                app.state.model_loaded = True
-            except Exception as exc:
-                app.state.model = None
-                app.state.model_loaded = False
-                app.state.model_load_error = str(exc)
-                raise
-            finally:
-                app.state.model_loading = False
-
-        return app.state.model
+    def health() -> dict[str, str | bool]:
+        return {"status": "ok", "model_loaded": app.state.model is not None}
 
     @app.post("/translate", response_model=TranslateResponse)
     def translate(payload: TranslateRequest) -> TranslateResponse:
@@ -150,7 +89,9 @@ def create_app(load_model_func: Callable[[str, str | None], Any] = _default_load
             if not payload.text or not payload.text.strip():
                 raise HTTPException(status_code=400, detail="text must not be empty")
 
-            model = _ensure_model_loaded()
+            model = app.state.model
+            if model is None:
+                raise HTTPException(status_code=503, detail="model is not loaded")
             model_input = pd.DataFrame({"text": [payload.text]})
 
             print("before model.predict", flush=True)
