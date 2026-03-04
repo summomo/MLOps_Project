@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
+import traceback
 from contextlib import asynccontextmanager
 from typing import Any, Callable
 
@@ -62,38 +65,66 @@ def _extract_translation(prediction: Any) -> str:
 
 
 def create_app(load_model_func: Callable[[str, str | None], Any] = _default_loader) -> FastAPI:
+    model_load_lock = threading.Lock()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+        app.state.tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
         app.state.model_name = os.getenv("MODEL_NAME", "fr2en-translator")
         app.state.model_stage = _get_stage_from_env()
         app.state.model_uri = f"models:/{app.state.model_name}/{app.state.model_stage}"
-        app.state.model = load_model_func(app.state.model_uri, tracking_uri)
+        app.state.model = None
 
         yield
 
     app = FastAPI(title="Registry-first Translation API", lifespan=lifespan)
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    def health() -> dict[str, str | bool]:
+        return {"status": "ok", "model_loaded": app.state.model is not None}
+
+    def _ensure_model_loaded() -> Any:
+        if app.state.model is not None:
+            return app.state.model
+
+        with model_load_lock:
+            if app.state.model is not None:
+                return app.state.model
+            app.state.model = load_model_func(app.state.model_uri, app.state.tracking_uri)
+
+        return app.state.model
 
     @app.post("/translate", response_model=TranslateResponse)
     def translate(payload: TranslateRequest) -> TranslateResponse:
-        if not payload.text or not payload.text.strip():
-            raise HTTPException(status_code=400, detail="text must not be empty")
+        started_at = time.perf_counter()
+        print("received request", flush=True)
 
-        model_input = pd.DataFrame({"text": [payload.text]})
-        prediction = app.state.model.predict(model_input)
-        translation = _extract_translation(prediction)
+        try:
+            if not payload.text or not payload.text.strip():
+                raise HTTPException(status_code=400, detail="text must not be empty")
 
-        return TranslateResponse(
-            translation=translation,
-            model_name=app.state.model_name,
-            model_stage=app.state.model_stage,
-            model_uri=app.state.model_uri,
-        )
+            model = _ensure_model_loaded()
+            model_input = pd.DataFrame({"text": [payload.text]})
+
+            print("before model.predict", flush=True)
+            prediction = model.predict(model_input)
+            print("after model.predict", flush=True)
+            translation = _extract_translation(prediction)
+
+            elapsed = time.perf_counter() - started_at
+            print(f"elapsed = {elapsed:.3f}s", flush=True)
+
+            return TranslateResponse(
+                translation=translation,
+                model_name=app.state.model_name,
+                model_stage=app.state.model_stage,
+                model_uri=app.state.model_uri,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return app
 
