@@ -24,6 +24,12 @@ jobs:
 
       - name: Run staging gates
         env:
-          STAGING_URL: ${{ secrets.STAGING_URL }}
+          STAGING_URL: ${{ secrets.STAGING_URL != '' && secrets.STAGING_URL || vars.STAGING_URL != '' && vars.STAGING_URL || 'https://mlops-api-staging.onrender.com' }}
+          GATE_READY_TIMEOUT_SECONDS: "420"
+          GATE_READY_POLL_SECONDS: "10"
+          GATE_WARMUP_TIMEOUT_SECONDS: "120"
+          GATE_REQUEST_TIMEOUT_SECONDS: "45"
+          GATE_REQUEST_RETRIES: "4"
+          GATE_REQUEST_BACKOFF_SECONDS: "2"
         run: |
           python ml/src/gates.py

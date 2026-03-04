@@ -74,14 +74,50 @@ def create_app(load_model_func: Callable[[str, str | None], Any] = _default_load
         app.state.model_stage = _get_stage_from_env()
         app.state.model_uri = f"models:/{app.state.model_name}/{app.state.model_stage}"
         app.state.model = None
+        app.state.model_loaded = False
+        app.state.model_loading = False
+        app.state.model_load_error = None
+
+        def preload_in_background() -> None:
+            try:
+                _ensure_model_loaded()
+            except Exception:
+                traceback.print_exc()
+
+        threading.Thread(target=preload_in_background, daemon=True).start()
 
         yield
 
     app = FastAPI(title="Registry-first Translation API", lifespan=lifespan)
 
     @app.get("/health")
-    def health() -> dict[str, str | bool]:
-        return {"status": "ok", "model_loaded": app.state.model is not None}
+    def health() -> dict[str, str | bool | None]:
+        return {
+            "status": "ok",
+            "model_loaded": app.state.model_loaded,
+            "model_loading": app.state.model_loading,
+            "ready": app.state.model_loaded,
+            "model_load_error": app.state.model_load_error,
+        }
+
+    @app.get("/ready")
+    def ready() -> dict[str, str | bool | None]:
+        if app.state.model_loaded:
+            return {
+                "status": "ok",
+                "ready": True,
+                "model_loaded": True,
+            }
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "loading",
+                "ready": False,
+                "model_loaded": app.state.model_loaded,
+                "model_loading": app.state.model_loading,
+                "model_load_error": app.state.model_load_error,
+            },
+        )
 
     def _ensure_model_loaded() -> Any:
         if app.state.model is not None:
@@ -90,7 +126,18 @@ def create_app(load_model_func: Callable[[str, str | None], Any] = _default_load
         with model_load_lock:
             if app.state.model is not None:
                 return app.state.model
-            app.state.model = load_model_func(app.state.model_uri, app.state.tracking_uri)
+            app.state.model_loading = True
+            app.state.model_load_error = None
+            try:
+                app.state.model = load_model_func(app.state.model_uri, app.state.tracking_uri)
+                app.state.model_loaded = True
+            except Exception as exc:
+                app.state.model = None
+                app.state.model_loaded = False
+                app.state.model_load_error = str(exc)
+                raise
+            finally:
+                app.state.model_loading = False
 
         return app.state.model
 

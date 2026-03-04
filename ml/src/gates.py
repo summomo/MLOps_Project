@@ -23,26 +23,101 @@ def _p95_seconds(latencies: List[float]) -> float:
     return quantiles[94]
 
 
+def _post_with_retries(
+    endpoint: str,
+    payload: dict,
+    timeout_seconds: float,
+    retries: int,
+    backoff_seconds: float,
+) -> requests.Response:
+    last_exception: requests.RequestException | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            return requests.post(endpoint, json=payload, timeout=timeout_seconds)
+        except requests.RequestException as exc:
+            last_exception = exc
+            if attempt < retries:
+                time.sleep(backoff_seconds * attempt)
+    if last_exception is None:
+        _fail("unexpected retry failure")
+    _fail(f"network error after {retries} attempts: {last_exception}")
+
+
+def _wait_until_ready(staging_url: str, timeout_seconds: float, poll_seconds: float) -> None:
+    ready_endpoint = f"{staging_url}/ready"
+    health_endpoint = f"{staging_url}/health"
+    deadline = time.time() + timeout_seconds
+
+    while time.time() < deadline:
+        try:
+            ready_response = requests.get(ready_endpoint, timeout=10)
+            if ready_response.status_code == 200:
+                print("Readiness gate passed via /ready")
+                return
+        except requests.RequestException:
+            pass
+
+        try:
+            health_response = requests.get(health_endpoint, timeout=10)
+            if health_response.status_code == 200:
+                payload = health_response.json()
+                if bool(payload.get("model_loaded")):
+                    print("Readiness gate passed via /health model_loaded=true")
+                    return
+        except (requests.RequestException, ValueError):
+            pass
+
+        time.sleep(poll_seconds)
+
+    _fail(f"service did not become ready within {timeout_seconds:.1f}s")
+
+
 def main() -> None:
     staging_url = os.getenv("STAGING_URL", "").strip().rstrip("/")
     if not staging_url:
         _fail("STAGING_URL is missing")
 
     threshold_seconds = float(os.getenv("GATE_MAX_P95_SECONDS", "1.0"))
+    ready_timeout_seconds = float(os.getenv("GATE_READY_TIMEOUT_SECONDS", "420"))
+    ready_poll_seconds = float(os.getenv("GATE_READY_POLL_SECONDS", "10"))
+    warmup_timeout_seconds = float(os.getenv("GATE_WARMUP_TIMEOUT_SECONDS", "120"))
+    request_timeout_seconds = float(os.getenv("GATE_REQUEST_TIMEOUT_SECONDS", "45"))
+    request_retries = int(os.getenv("GATE_REQUEST_RETRIES", "4"))
+    request_backoff_seconds = float(os.getenv("GATE_REQUEST_BACKOFF_SECONDS", "2"))
     texts = ["bonjour", "merci", "salut"]
     latencies: List[float] = []
 
     print(f"Running gates against: {staging_url}")
     print(f"Latency threshold (p95): {threshold_seconds:.3f}s")
 
+    _wait_until_ready(staging_url, ready_timeout_seconds, ready_poll_seconds)
+
     endpoint = f"{staging_url}/translate"
+
+    print(
+        "Warmup request: "
+        f"timeout={warmup_timeout_seconds:.1f}s, retries={request_retries}, backoff={request_backoff_seconds:.1f}s"
+    )
+    warmup_response = _post_with_retries(
+        endpoint=endpoint,
+        payload={"text": "warmup"},
+        timeout_seconds=warmup_timeout_seconds,
+        retries=request_retries,
+        backoff_seconds=request_backoff_seconds,
+    )
+    print(f"Warmup: status={warmup_response.status_code}")
+    if warmup_response.status_code != 200:
+        _fail(f"warmup returned non-200 status: {warmup_response.status_code}")
 
     for index, text in enumerate(texts, start=1):
         started_at = time.perf_counter()
-        try:
-            response = requests.post(endpoint, json={"text": text}, timeout=15)
-        except requests.RequestException as exc:
-            _fail(f"request {index} failed with network error: {exc}")
+        response = _post_with_retries(
+            endpoint=endpoint,
+            payload={"text": text},
+            timeout_seconds=request_timeout_seconds,
+            retries=request_retries,
+            backoff_seconds=request_backoff_seconds,
+        )
 
         elapsed = time.perf_counter() - started_at
         latencies.append(elapsed)
