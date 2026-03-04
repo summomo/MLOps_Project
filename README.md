@@ -18,6 +18,7 @@ $env:TOKENIZER_PATH="C:\absolute\path\to\spm_joint_fr2en_v3.model"
 $env:MODEL_NAME="fr2en-translator"
 $env:MODEL_STAGE="Staging"
 $env:MLFLOW_TRACKING_URI="http://127.0.0.1:5000"
+$env:HF_MODEL_ID="Helsinki-NLP/opus-mt-fr-en"  # optional: enables HF export mode
 ```
 
 `MODEL_STAGE` must use MLflow fixed enum values with exact case: `Staging`, `Production`, `Archived`, `None`.
@@ -32,11 +33,13 @@ python ml/src/export_mlflow_model.py
 ```
 
 The script will:
-- Read `MODEL_CKPT_PATH` and `TOKENIZER_PATH`
-- Package checkpoint + tokenizer together as `mlflow.pyfunc` artifacts
-- Log params: `git_commit`, `dvc_data_rev`, `ckpt_source_path`, `tokenizer_source_path`
+- If `HF_MODEL_ID` is set: export a Hugging Face Marian FR->EN model (`Helsinki-NLP/opus-mt-fr-en`) via `ml/src/hf_marian_mlflow_model.py`
+- Otherwise: read `MODEL_CKPT_PATH` and `TOKENIZER_PATH` and export the legacy checkpoint wrapper
+- Log params: `git_commit`, `dvc_data_rev`, plus mode-specific source params (`hf_model_id` or checkpoint/tokenizer paths)
 - Register under `MODEL_NAME` (default: `fr2en-translator`)
 - Try to transition automatically to `Staging`; if permissions are insufficient, it prints manual commands
+
+HF mode also logs `hf_model_id` and stores downloaded HF files as MLflow artifacts for reproducible serving.
 
 ### 4) Start the API (loads only from Registry stage)
 
@@ -136,3 +139,28 @@ Create this GitHub secret before using the workflow:
 - Value: your staging service base URL, for example `https://mlops-api-staging.onrender.com`
 
 Use the resulting `gates` workflow status check in branch rulesets so that merges to `main` require successful gates.
+
+## 8) Local validation (HF model on Registry-first flow)
+
+1. Configure MLflow tracking credentials via environment variables (do not hardcode tokens).
+2. Set:
+
+```powershell
+$env:HF_MODEL_ID="Helsinki-NLP/opus-mt-fr-en"
+```
+
+3. Register model to registry stage:
+
+```powershell
+python ml/src/export_mlflow_model.py
+```
+
+4. Ensure Render (or local API) uses only:
+
+- `MODEL_NAME=fr2en-translator`
+- `MODEL_STAGE=Staging` (or `Production`)
+
+5. Verify:
+
+- `GET /health` returns `200`
+- `POST /translate` with `{"text":"bonjour"}` returns non-empty English output
