@@ -1,19 +1,31 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 import mlflow.pyfunc
 import pandas as pd
 import sentencepiece as spm
-import torch
 
 
 class TranslatorPyfunc(mlflow.pyfunc.PythonModel):
     def __init__(self) -> None:
         self.model: Any = None
         self.tokenizer: spm.SentencePieceProcessor | None = None
-        self.device = torch.device("cpu")
+        self.device = "cpu"
+
+    def _is_truthy_env(self, name: str) -> bool:
+        value = os.getenv(name, "").strip().lower()
+        return value in {"1", "true", "yes", "on"}
+
+    def _translate_mode(self) -> str:
+        mode = os.getenv("TRANSLATE_MODE", "full").strip().lower()
+        if self._is_truthy_env("TOKENIZER_ONLY_MODE"):
+            return "stub"
+        if mode not in {"full", "stub"}:
+            return "full"
+        return mode
 
     def _resolve_artifact_path(self, raw_path: str) -> Path:
         normalized_path = Path(raw_path.replace("\\", "/"))
@@ -55,7 +67,13 @@ class TranslatorPyfunc(mlflow.pyfunc.PythonModel):
         self.tokenizer = spm.SentencePieceProcessor()
         self.tokenizer.load(tokenizer_path.as_posix())
 
+        if self._translate_mode() == "stub":
+            self.model = None
+            return
+
         loaded_checkpoint: Any = None
+        import torch
+
         try:
             loaded_checkpoint = torch.load(ckpt_path, map_location=self.device)
         except Exception:
@@ -88,6 +106,8 @@ class TranslatorPyfunc(mlflow.pyfunc.PythonModel):
     def _translate_with_model(self, text: str, token_ids: list[int]) -> str | None:
         if self.model is None:
             return None
+
+        import torch
 
         try:
             if hasattr(self.model, "translate"):
