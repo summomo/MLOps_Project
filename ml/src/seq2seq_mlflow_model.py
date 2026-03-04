@@ -16,19 +16,19 @@ class TranslatorPyfunc(mlflow.pyfunc.PythonModel):
         self.device = torch.device("cpu")
 
     def _resolve_artifact_path(self, raw_path: str) -> Path:
-        direct_path = Path(raw_path)
-        if direct_path.exists():
-            return direct_path
-
         normalized_path = Path(raw_path.replace("\\", "/"))
         if normalized_path.exists():
             return normalized_path
 
-        filename = Path(raw_path.replace("\\", "/")).name
+        direct_path = Path(raw_path)
+        if direct_path.exists():
+            return direct_path
+
+        filename = normalized_path.name
         search_roots = [normalized_path.parent, direct_path.parent]
 
         for root in search_roots:
-            if not root:
+            if not root or not root.exists():
                 continue
             candidate = root / filename
             if candidate.exists():
@@ -37,14 +37,23 @@ class TranslatorPyfunc(mlflow.pyfunc.PythonModel):
             if artifacts_candidate.exists():
                 return artifacts_candidate
 
-        raise FileNotFoundError(f"Artifact not found: {raw_path}")
+        raise FileNotFoundError(f"Artifact not found: {raw_path} (normalized={normalized_path})")
 
     def load_context(self, context: mlflow.pyfunc.PythonModelContext) -> None:
         ckpt_path = self._resolve_artifact_path(context.artifacts["checkpoint"])
         tokenizer_path = self._resolve_artifact_path(context.artifacts["tokenizer"])
 
+        if tokenizer_path.is_dir():
+            tokenizer_candidates = list(tokenizer_path.glob("*.model"))
+            if not tokenizer_candidates:
+                raise FileNotFoundError("No tokenizer .model found in artifact directory")
+            tokenizer_path = tokenizer_candidates[0]
+
+        if not tokenizer_path.exists():
+            raise FileNotFoundError(f"Tokenizer file not found: {tokenizer_path}")
+
         self.tokenizer = spm.SentencePieceProcessor()
-        self.tokenizer.load(str(tokenizer_path))
+        self.tokenizer.load(tokenizer_path.as_posix())
 
         loaded_checkpoint: Any = None
         try:
